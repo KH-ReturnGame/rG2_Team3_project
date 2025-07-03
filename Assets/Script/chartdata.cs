@@ -13,10 +13,10 @@ public class NotePathPoint
 public class NoteData
 {
     public float time;
-    public string type;
-    public List<NotePathPoint> path = new List<NotePathPoint>();
-    public float size = 1.0f;
-    public float? bpmChange = null;
+    public int type;
+    public int lane;
+    public float length;
+    public float speed;
 }
 
 public class Metadata

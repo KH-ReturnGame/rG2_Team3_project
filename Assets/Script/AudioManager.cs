@@ -25,9 +25,9 @@ public class AudioManager : MonoBehaviour
         musicSource.spatialBlend = 0f;
     }
 
-    public IEnumerator LoadAndPlayFromSwm(string swmPath, string difficulty = "normal")
+    public IEnumerator LoadAndPlayFromChart(string chartPath, string difficulty = "normal")
     {
-        using (FileStream fs = new FileStream(swmPath, FileMode.Open))
+        using (FileStream fs = new FileStream(chartPath, FileMode.Open))
         using (ZipArchive zip = new ZipArchive(fs, ZipArchiveMode.Read))
         {
             var musicEntry = zip.GetEntry("music.mp3");

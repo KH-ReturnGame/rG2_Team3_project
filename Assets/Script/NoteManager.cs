@@ -5,9 +5,10 @@ using System.Collections;
 
 public class NoteManager : MonoBehaviour
 {
-    public string swmFileName = "test.swm";
+    public string chartFileName = "test.chart";
     public GameObject NotePrefab;
-    public float spawnX = 0f;
+    public Transform spawnPoint; // 스폰 기준 위치
+
     public float v_offset = 0f;
     public float despawnY = -5f;
 
@@ -21,10 +22,10 @@ public class NoteManager : MonoBehaviour
     private AudioSource audioSource;
     private List<NoteData> hitsoundNotes = new List<NoteData>();
 
-
-    private IEnumerator Init(string swmPath)
+    private IEnumerator Start()
     {
-        yield return StartCoroutine(AudioManager.Instance.LoadAndPlayFromSwm(swmPath));
+        string chartPath = Path.Combine(Application.streamingAssetsPath, chartFileName);
+        yield return StartCoroutine(AudioManager.Instance.LoadAndPlayFromChart(chartPath));
 
         map = AudioManager.Instance.ParsedMap;
 
@@ -36,20 +37,12 @@ public class NoteManager : MonoBehaviour
 
         hitsoundNotes = new List<NoteData>(map.notes);
 
-        if (NotePrefab.TryGetComponent<Renderer>(out var renderer))
-            noteBounds = renderer.bounds.size;
-        else
-            noteBounds = Vector3.one;
-
-        initialized = true;
-    }
-
-    private void Start()
-    {
-        string swmPath = Path.Combine(Application.streamingAssetsPath, swmFileName);
-        StartCoroutine(Init(swmPath));
+        noteBounds = NotePrefab.TryGetComponent<Renderer>(out var renderer)
+            ? renderer.bounds.size
+            : Vector3.one;
 
         audioSource = gameObject.AddComponent<AudioSource>();
+        initialized = true;
     }
 
     private void Update()
@@ -57,45 +50,33 @@ public class NoteManager : MonoBehaviour
         if (!initialized || !AudioManager.Instance.IsPlaying || map == null || map.notes == null)
             return;
 
-        float spawnAheadTimeMs;
-        float defaultSpawnDistance = 100f;
-        spawnAheadTimeMs = (defaultSpawnDistance / PlayerData.noteSpeed) * 1000f;
-
-        //노트 간격 계산
-        if (Input.GetKeyDown(KeyCode.F1))
-        {
-            PlayerData.noteSpeed = Mathf.Max(1f, PlayerData.noteSpeed - 1f);
-        }
-        if (Input.GetKeyDown(KeyCode.F2))
-        {
-            PlayerData.noteSpeed += 1f;
-        }
+        HandleSpeedAdjustment();
 
         float currentTimeMs = AudioManager.Instance.CurrentTimeMs;
+        float spawnAheadTimeMs = (100f / PlayerData.noteSpeed) * 1000f;
 
-        // 노트 미리 생성
-        while (noteIndex < map.notes.Count &&
-               map.notes[noteIndex].time <= currentTimeMs + spawnAheadTimeMs)
+        // 노트 스폰
+        while (noteIndex < map.notes.Count && map.notes[noteIndex].time <= currentTimeMs + spawnAheadTimeMs)
         {
             var noteData = map.notes[noteIndex];
-            if (noteData.path == null || noteData.path.Count == 0)
-            {
-                noteIndex++;
-                continue;
-            }
-
-            var p = noteData.path[0];
             float timeUntilHit = noteData.time - currentTimeMs;
             float yOffset = (timeUntilHit / 1000f) * PlayerData.noteSpeed;
 
-            Vector3 spawnPos = new Vector3(
-                spawnX + p.pos * noteBounds.x * 0.5f,
-                yOffset,
-                0
-            );
+            Vector3 spawnPos = spawnPoint.position +
+                new Vector3(noteData.lane * noteBounds.x * 0.5f, yOffset, 0);
 
             GameObject noteObj = Instantiate(NotePrefab, spawnPos, Quaternion.identity);
-            noteObj.transform.localScale = noteBounds * noteData.size;
+
+            // 롱노트이면 길이 조절
+            if (noteData.type == 1 && noteData.length > 0f)
+            {
+                float visualLength = (noteData.length / 1000f) * PlayerData.noteSpeed;
+                noteObj.transform.localScale = new Vector3(noteBounds.x, visualLength, noteBounds.z);
+            }
+            else
+            {
+                noteObj.transform.localScale = noteBounds;
+            }
 
             if (noteObj.TryGetComponent<chartdata>(out var obj))
             {
@@ -107,19 +88,18 @@ public class NoteManager : MonoBehaviour
             noteIndex++;
         }
 
-        // 노트 위치 실시간 조정 및 despawn 처리
+        // 노트 이동 및 삭제 처리
+        float adjustedTime = currentTimeMs - v_offset;
         for (int i = activeNotes.Count - 1; i >= 0; i--)
         {
-            GameObject note = activeNotes[i];
+            var note = activeNotes[i];
+            if (!note.TryGetComponent<chartdata>(out var obj)) continue;
 
-            if (note.TryGetComponent<chartdata>(out var obj))
-            {
-                float timeUntilHit = obj.targetTime - currentTimeMs;
-                float yOffset = (timeUntilHit / 1000f) * PlayerData.noteSpeed;
+            float timeUntilHit = obj.targetTime - currentTimeMs;
+            float yOffset = (timeUntilHit / 1000f) * PlayerData.noteSpeed;
 
-                Vector3 pos = note.transform.position;
-                note.transform.position = new Vector3(pos.x, yOffset, pos.z);
-            }
+            Vector3 pos = note.transform.position;
+            note.transform.position = new Vector3(pos.x, yOffset + spawnPoint.position.y, pos.z);
 
             if (note.transform.position.y < despawnY)
             {
@@ -127,20 +107,28 @@ public class NoteManager : MonoBehaviour
                 activeNotes.RemoveAt(i);
             }
         }
-        float adjustedTime = currentTimeMs - v_offset;
 
+        // 히트사운드
         for (int i = hitsoundNotes.Count - 1; i >= 0; i--)
         {
             float delta = hitsoundNotes[i].time - adjustedTime;
-
             if (delta <= 0)
             {
                 if (hitSound != null)
                     audioSource.PlayOneShot(hitSound);
 
-                hitsoundNotes.RemoveAt(i); // 중복 방지
+                hitsoundNotes.RemoveAt(i);
             }
         }
+    }
+
+    private void HandleSpeedAdjustment()
+    {
+        if (Input.GetKeyDown(KeyCode.F1))
+            PlayerData.noteSpeed = Mathf.Max(1f, PlayerData.noteSpeed - 1f);
+
+        if (Input.GetKeyDown(KeyCode.F2))
+            PlayerData.noteSpeed += 1f;
     }
 
     public List<GameObject> GetActiveNotes() => activeNotes;

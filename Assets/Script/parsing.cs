@@ -9,119 +9,135 @@ public class Parsing
     public static float bpm;
     public float offset = 0f;
     public List<NoteData> notes = new List<NoteData>();
-    public List<BpmChange> bpmChanges = new List<BpmChange>();
+
+    // 현재 BPM/박자 상태
+    private float currentBpm;
+    private int numerator = 4;
+    private int denominator = 4;
+
+    private const float ticksPerBeat = 16f;
 
     public void Parse(ZipArchive zip, string difficulty = "normal")
     {
-        
-        // 필수 파일 검사
-        string[] requiredFiles = new[]
-        {
-            "image.png","music.mp3" ,"metadata.json", $"{difficulty}.csv"
-        };
-
+        string[] requiredFiles = new[] { "image.png", "music.mp3", "metadata.json", $"{difficulty}.csv" };
         foreach (string file in requiredFiles)
         {
             if (zip.GetEntry(file) == null)
             {
-                Debug.LogError($".swm 파일에 {file} 누락됨.");
+                Debug.LogError($".chart 파일에 {file} 누락됨.");
                 return;
             }
         }
 
-        // metadata 로드
         var metaEntry = zip.GetEntry("metadata.json");
         using (var reader = new StreamReader(metaEntry.Open()))
         {
             string metaText = reader.ReadToEnd();
             Metadata meta = JsonConvert.DeserializeObject<Metadata>(metaText);
             bpm = meta.bpm;
+            currentBpm = bpm;
             offset = meta.offset;
         }
 
-        // csv 노트 파싱
         var csvEntry = zip.GetEntry($"{difficulty}.csv");
         using (var reader = new StreamReader(csvEntry.Open()))
         {
-            string header = reader.ReadLine(); // skip header
-            
+            _ = reader.ReadLine(); // 헤더 스킵
             while (!reader.EndOfStream)
             {
-                var line = reader.ReadLine();
-                Debug.Log($"[Parsing] 라인: {line}");
-                if (string.IsNullOrWhiteSpace(line)) continue;
+                string line = reader.ReadLine();
+                if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#")) continue;
 
+                Debug.Log($"[Parsing] 라인: {line}");
                 var tokens = line.Split(',');
-                Debug.Log($"→ time: {tokens[0]}");
-                if (tokens.Length < 5)
-                {
-                    Debug.LogWarning($"잘못된 줄: \"{line}\"");
-                    continue;
-                }
 
                 try
                 {
-                    float time = float.Parse(tokens[0].Trim());
-                    int type = int.Parse(tokens[1].Trim());
-                    float pos = float.Parse(tokens[2].Trim());
-                    float size = float.Parse(tokens[3].Trim());
-                    int bend = int.Parse(tokens[4].Trim());
-                    float? bpmChange = null;
+                    int type = int.Parse(tokens[0].Trim());
 
-                    if (tokens.Length >= 6 && float.TryParse(tokens[5].Trim(), out float parsedBpm))
-                        bpmChange = parsedBpm;
-
-                    var point = new NotePathPoint
+                    if (type == 2)
                     {
-                        t = 0f,
-                        pos = pos,
-                        bend = bend
-                    };
+                        // BPM/박자 변경
+                        if (tokens.Length >= 2 && float.TryParse(tokens[1].Trim(), out float parsedBpm))
+                            currentBpm = parsedBpm;
 
-                    if (bpmChange.HasValue)
-                        bpmChanges.Add(new BpmChange { time = time, bpm = bpmChange.Value });
+                        if (tokens.Length >= 4)
+                        {
+                            if (int.TryParse(tokens[2].Trim(), out int num))
+                                numerator = num;
+                            if (int.TryParse(tokens[3].Trim(), out int den))
+                                denominator = den;
+                        }
 
-                    var existing = notes.Find(n => Mathf.Approximately(n.time, time));
-                    if (existing != null && type == 1)
-                    {
-                        existing.path.Add(point);
+                        Debug.Log($"[BPM 변경] bpm = {currentBpm}, 박자 = {numerator}/{denominator}");
+                        continue;
                     }
-                    else
+
+                    if (tokens.Length < 4)
+                    {
+                        Debug.LogWarning($"[Parsing] 잘못된 줄: \"{line}\"");
+                        continue;
+                    }
+
+                    int measure = int.Parse(tokens[1].Trim());
+                    int position = int.Parse(tokens[2].Trim());
+                    int lane = int.Parse(tokens[3].Trim());
+
+                    // tick to ms
+                    float ticksPerMeasure = numerator * ticksPerBeat;
+                    float absoluteTick = measure * ticksPerMeasure + position;
+                    float time = (60000f / currentBpm) * (absoluteTick / ticksPerBeat);
+                    float speed = (currentBpm * 4f / denominator) / bpm;
+
+                    // 노트 생성
+                    if (type == 0)
                     {
                         notes.Add(new NoteData
                         {
                             time = time,
-                            type = (type == 0 ? "tap" : "hold"),
-                            path = new List<NotePathPoint> { point },
-                            size = size,
-                            bpmChange = bpmChange
+                            type = 0,
+                            lane = lane,
+                            speed = speed
+                        });
+                    }
+                    else if (type == 1)
+                    {
+                        if (tokens.Length < 6)
+                        {
+                            Debug.LogWarning($"롱노트 줄 형식 오류: {line}");
+                            continue;
+                        }
+
+                        int sMeasure = int.Parse(tokens[1].Trim());
+                        int sPos = int.Parse(tokens[2].Trim());
+                        int eMeasure = int.Parse(tokens[3].Trim());
+                        int ePos = int.Parse(tokens[4].Trim());
+                        lane = int.Parse(tokens[5].Trim());
+
+                        ticksPerMeasure = numerator * ticksPerBeat;
+                        float sTick = sMeasure * ticksPerMeasure + sPos;
+                        float eTick = eMeasure * ticksPerMeasure + ePos;
+
+                        float sTime = (60000f / currentBpm) * (sTick / ticksPerBeat);
+                        float eTime = (60000f / currentBpm) * (eTick / ticksPerBeat);
+                        speed = (currentBpm * 4f / denominator) / bpm;
+
+                        notes.Add(new NoteData
+                        {
+                            time = sTime,
+                            type = 1,
+                            lane = lane,
+                            speed = speed,
+                            length = eTime - sTime
                         });
                     }
                 }
                 catch (System.Exception ex)
                 {
-                    Debug.LogError($"파싱 실패: \"{line}\" → {ex.Message}");
-                    continue;
+                    Debug.LogError($"[Parsing] 파싱 실패: \"{line}\" → {ex.Message}");
                 }
             }
         }
-    }
-
-    public float GetEffectiveBpm(float time)
-    {
-        float currentBpm = bpm;
-        foreach (var change in bpmChanges)
-        {
-            if (change.time > time) break;
-            currentBpm = change.bpm;
-        }
-        return currentBpm;
-    }
-
-    public class BpmChange
-    {
-        public float time;
-        public float bpm;
     }
 
     public class Metadata
