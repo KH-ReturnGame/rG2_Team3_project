@@ -1,11 +1,20 @@
 using UnityEngine;
 
-public class SongData : MonoBehaviour
+[System.Serializable]
+public class SongData
 {
-    public SongInfo SongInfo;
+    public string songName;
+    public string artist;
+    public Sprite albumArt;
+    public AudioClip songClip;
+    public int difficulty;
+    public float bpm;
 
-    public void DrawSongListItem(SongInfo songInfo)
+    public SongData(string name, string artist, int difficulty, float bpm)
     {
-        SongInfo = songInfo;
+        this.songName = name;
+        this.artist = artist;
+        this.difficulty = difficulty;
+        this.bpm = bpm;
     }
 }
